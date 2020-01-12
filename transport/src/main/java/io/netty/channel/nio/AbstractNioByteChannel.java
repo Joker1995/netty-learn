@@ -131,6 +131,12 @@ public abstract class AbstractNioByteChannel extends AbstractNioChannel {
         @Override
         public final void read() {
             final ChannelConfig config = config();
+            /*
+             * 用于判断是否中断读取
+             * 如果底层 Socket 已经关闭输入流或链接终止（可能是经过 Netty 关闭，也可能是外部导致的关闭），
+             * 且通道本身不支持半关闭或 Netty 之前已经确认过该通道输入流被关闭（通过标识位留存判断）；则当前读取中断，方法直接返回
+             * 主要是避免后续无谓的读取操作导致的内存分配行为
+             */
             if (shouldBreakReadReady(config)) {
                 clearReadPending();
                 return;
@@ -138,6 +144,7 @@ public abstract class AbstractNioByteChannel extends AbstractNioChannel {
             final ChannelPipeline pipeline = pipeline();
             final ByteBufAllocator allocator = config.getAllocator();
             final RecvByteBufAllocator.Handle allocHandle = recvBufAllocHandle();
+            // 重置了读取逻辑处理器的统计数据：总计读取消息数和总计读取字节数
             allocHandle.reset(config);
 
             ByteBuf byteBuf = null;
@@ -162,8 +169,8 @@ public abstract class AbstractNioByteChannel extends AbstractNioChannel {
                     readPending = false;
                     pipeline.fireChannelRead(byteBuf);
                     byteBuf = null;
-                } while (allocHandle.continueReading());
-
+                } while (allocHandle.continueReading());// 用于判断是否继续读取,读取字节数大于0且预期读取字节数 attemptedBytesRead 与最后一次切实读取的字节数 lastBytesRead 相等
+                // 如果无需继续读取，则离开循环，触发管道 ChannelReadComplete 事件，并且结束本次的可读就绪 Key 的全部处理流程
                 allocHandle.readComplete();
                 pipeline.fireChannelReadComplete();
 
@@ -179,6 +186,11 @@ public abstract class AbstractNioByteChannel extends AbstractNioChannel {
                 // * The user called Channel.read() or ChannelHandlerContext.read() in channelReadComplete(...) method
                 //
                 // See https://github.com/netty/netty/issues/2254
+                /*
+                 * 如果通道的读取采用手动的模式，也就是需要由业务代码来触发，则每次处理完毕可读就绪 Key，就需要移除这个可读就绪的事件关注。直到下一次再被手动触发
+                 * 这里 readPending 就用于判断当前是否要移除可读就绪的事件关注
+                 * 因为有可能上面代码在触发管道的 channelRead 或者 channelReadComplete 事件时业务代码又注册了 read 操作，那么这里就不需要移除可读就绪事件的关注
+                 */
                 if (!readPending && !config.isAutoRead()) {
                     removeReadOp();
                 }
@@ -201,6 +213,7 @@ public abstract class AbstractNioByteChannel extends AbstractNioChannel {
      * @throws Exception if an I/O exception occurs during write.
      */
     protected final int doWrite0(ChannelOutboundBuffer in) throws Exception {
+        // 从 ChannelOutboundBuffer 获取当前的 Entry，如果当前 Entry 为 null 则直接返回 0，否则委托给方法 AbstractNioByteChannel#doWriteInternal
         Object msg = in.current();
         if (msg == null) {
             // Directly return here so incompleteWrite(...) is not called.
@@ -211,6 +224,7 @@ public abstract class AbstractNioByteChannel extends AbstractNioChannel {
 
     private int doWriteInternal(ChannelOutboundBuffer in, Object msg) throws Exception {
         if (msg instanceof ByteBuf) {
+            // 将 ByteBuf 数据写出，如果实际写出了字节，则变更当前 Entry 的写出进度并返回 1；如果没有实际写出字节，则从队列中移除该 Entry 并返回 0
             ByteBuf buf = (ByteBuf) msg;
             if (!buf.isReadable()) {
                 in.remove();
@@ -226,6 +240,8 @@ public abstract class AbstractNioByteChannel extends AbstractNioChannel {
                 return 1;
             }
         } else if (msg instanceof FileRegion) {
+            // 如果 FileRegion 已经传输了全部指定的长度，则移除队列当前的 Entry 并返回 0；
+            // 否则通过 JDk NIO 接口实现两个通道之间直接的数据传输，避免通过 ByteBuffer 中转，提升效率。传输完成后如果传输完毕也要移除队列的当前 Entry。并且最终返回 1
             FileRegion region = (FileRegion) msg;
             if (region.transferred() >= region.count()) {
                 in.remove();
@@ -241,9 +257,11 @@ public abstract class AbstractNioByteChannel extends AbstractNioChannel {
                 return 1;
             }
         } else {
+            //
             // Should not reach here.
             throw new Error();
         }
+        // 如果 if 和 else if 分支中在有数据可以写，但是实际写出字节数为 0 的情况下，意味着 socket 缓冲区满，返回 Integer.MAX_VALUE 以表示
         return WRITE_STATUS_SNDBUF_FULL;
     }
 
@@ -272,19 +290,30 @@ public abstract class AbstractNioByteChannel extends AbstractNioChannel {
                 return msg;
             }
 
+            /*
+             * 如果 ByteBuf 不是堆外的，则尝试转换为堆外内存，也就是 newDirectBuffer 方法
+             * 如果这个方法是尽最大努力转换，如果当前使用的 ByteBuf 分配器没有使用内存池，而当前线程也没有可以使用的 DirectByteBuf，则不进行转换,因为直接分配一个堆外的 ByteBuf 消耗较大
+             * 为何要将 ByteBuf 转化为堆外的模式?
+             * ByteBuf 本质上就是一个 byte[] 数组对象，如果一个堆内的 byte[] 要通过 socket 写出时，就需要先将数据拷贝到堆外，之后才能用堆外的数据执行写出
+             * 这是因为，通过 socket 的 api 写出 byte[] 内容，本质上是将 byte[] 在内存中的地址传递给了系统的 socket 接口。但是由于 JVM 的 GC 是会挪动堆内数据的位置的
+             * 这就可能导致系统在读取数据时因为 JVM 的 GC 导致原先给定的地址读取到非法数据
+             * 而堆外内存则不受 GC 控制，因此通过 socket 执行写出的场合，如果传递的是堆内的 byte[] 都需要拷贝堆外执行。而 JVM 执行的拷贝是自行创建一个 DirectByteBuffer 实例来进行数据拷贝
+             * 而创建 DirectByteBuffer 是消耗较大的操作，如果 Netty 层面可以直接转化，则可以提升效率。因此在 filterOutboundMessage 方法内会尝试执行转换
+             */
             return newDirectBuffer(buf);
         }
 
         if (msg instanceof FileRegion) {
             return msg;
         }
-
+        // 如果 msg 不是 ByteBuf 或者 FileRegion 则抛出不支持异常
         throw new UnsupportedOperationException(
                 "unsupported message type: " + StringUtil.simpleClassName(msg) + EXPECTED_TYPES);
     }
 
     protected final void incompleteWrite(boolean setOpWrite) {
         // Did not write completely.
+        // 因为 socket 缓存区满导致数据无法写出，此时的处理策略就是注册可写事件关注，等待被 selector 触发
         if (setOpWrite) {
             setOpWrite();
         } else {
@@ -292,6 +321,7 @@ public abstract class AbstractNioByteChannel extends AbstractNioChannel {
             // use our write quantum. In this case we no longer want to set the write OP because the socket is still
             // writable (as far as we know). We will find out next time we attempt to write if the socket is writable
             // and set the write OP if necessary.
+            // 在 doWrite 中，写出循环次数耗尽而进入该方法，此时 setOpWrite 为 false。Netty 认为此种情况下，将写出动作包装为任务，投递到 EventLoop 线程中，等待下次调度即可
             clearOpWrite();
 
             // Schedule flush again later so other tasks can be picked up in the meantime

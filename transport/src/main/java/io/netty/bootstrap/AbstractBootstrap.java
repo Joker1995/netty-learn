@@ -309,6 +309,10 @@ public abstract class AbstractBootstrap<B extends AbstractBootstrap<B, C>, C ext
         }
     }
 
+    /*
+     * 1) 初始化 Channel对象
+     * 2) 将 Channel对象注册到 EventLoop上
+     */
     final ChannelFuture initAndRegister() {
         Channel channel = null;
         try {

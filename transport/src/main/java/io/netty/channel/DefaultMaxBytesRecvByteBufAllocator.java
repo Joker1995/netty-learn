@@ -85,6 +85,7 @@ public class DefaultMaxBytesRecvByteBufAllocator implements MaxBytesRecvByteBufA
         @Override
         public boolean continueReading(UncheckedBooleanSupplier maybeMoreDataSupplier) {
             // Keep reading if we are allowed to read more bytes, and our last read filled up the buffer we provided.
+            // 读取字节数大于0且预期读取字节数 attemptedBytesRead 与最后一次切实读取的字节数 lastBytesRead 相等
             return bytesToRead > 0 && maybeMoreDataSupplier.get();
         }
 

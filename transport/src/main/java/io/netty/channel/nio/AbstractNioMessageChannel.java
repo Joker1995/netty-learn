@@ -64,7 +64,9 @@ public abstract class AbstractNioMessageChannel extends AbstractNioChannel {
             assert eventLoop().inEventLoop();
             final ChannelConfig config = config();
             final ChannelPipeline pipeline = pipeline();
+            // RecvByteBufAllocator.Handle 实现类是 AdaptiveRecvByteBufAllocator.HandleImpl,用来判断读取过程中单次读取的大小以及是否还有后续数据可以读取等任务
             final RecvByteBufAllocator.Handle allocHandle = unsafe().recvBufAllocHandle();
+            // 将一些统计数据归零，方便执行后续的判断
             allocHandle.reset(config);
 
             boolean closed = false;
@@ -72,6 +74,7 @@ public abstract class AbstractNioMessageChannel extends AbstractNioChannel {
             try {
                 try {
                     do {
+                        // Netty 中将在链接上读取二进制数据和在端口监听链接上获取接入新链接都视为读取操作，不过前者读取的是二进制数据，后者读取的是 Message
                         int localRead = doReadMessages(readBuf);
                         if (localRead == 0) {
                             break;
@@ -82,7 +85,7 @@ public abstract class AbstractNioMessageChannel extends AbstractNioChannel {
                         }
 
                         allocHandle.incMessagesRead(localRead);
-                    } while (allocHandle.continueReading());
+                    } while (allocHandle.continueReading());// 用于判断是否继续读取,读取字节数大于0且预期读取字节数 attemptedBytesRead 与最后一次切实读取的字节数 lastBytesRead 相等
                 } catch (Throwable t) {
                     exception = t;
                 }

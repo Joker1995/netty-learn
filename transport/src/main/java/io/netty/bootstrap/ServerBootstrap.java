@@ -234,9 +234,10 @@ public class ServerBootstrap extends AbstractBootstrap<ServerBootstrap, ServerCh
         @SuppressWarnings("unchecked")
         public void channelRead(ChannelHandlerContext ctx, Object msg) {
             final Channel child = (Channel) msg;
-
+            // 通过代码 child.pipeline().addLast(childHandler) 给接受的客户端链接通道加入了处理器
+            // 这个处理器是 ServerBootStrap 引导程序中写入的 ChannelInitializer 实现类，用于为通道加入用户自定义的业务处理器
             child.pipeline().addLast(childHandler);
-
+            // 设置通道配置（option）和属性（attribute），而后将其注册到 childGroup 实例上
             setChannelOptions(child, childOptions, logger);
 
             for (Entry<AttributeKey<?>, Object> e: childAttrs) {

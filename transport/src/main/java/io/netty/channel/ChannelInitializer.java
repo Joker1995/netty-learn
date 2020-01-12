@@ -112,6 +112,7 @@ public abstract class ChannelInitializer<C extends Channel> extends ChannelInbou
             if (initChannel(ctx)) {
 
                 // We are done with init the Channel, removing the initializer now.
+                // 成功完成对应通道的初始化工作后，从 initMap 删除自身的 ChannelHandlerContext 对象，防止集合无限变大
                 removeState(ctx);
             }
         }
@@ -124,14 +125,18 @@ public abstract class ChannelInitializer<C extends Channel> extends ChannelInbou
 
     @SuppressWarnings("unchecked")
     private boolean initChannel(ChannelHandlerContext ctx) throws Exception {
+        // 通过一个防御性的编程，避免初始化动作并发执行
+        // initMap 是一个并发安全的 Set，集合中的元素为具体的 ChannelHandlerContext 对象
         if (initMap.add(ctx)) { // Guard against re-entrance.
             try {
+                // 用来向 pipeline 中添加合适的处理器用于后续的业务处理
                 initChannel((C) ctx.channel());
             } catch (Throwable cause) {
                 // Explicitly call exceptionCaught(...) as we removed the handler before calling initChannel(...).
                 // We do so to prevent multiple calls to initChannel(...).
                 exceptionCaught(ctx, cause);
             } finally {
+                // 当抽象的 initChannel 方法之后完毕后，将自身从 pipeline 中移除
                 ChannelPipeline pipeline = ctx.pipeline();
                 if (pipeline.context(this) != null) {
                     pipeline.remove(this);

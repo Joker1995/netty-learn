@@ -379,7 +379,9 @@ public abstract class AbstractNioChannel extends AbstractChannel {
         boolean selected = false;
         for (;;) {
             try {
-                //注册原生channel对象到selector对象,0是SelectionKey.OP_ACCEPT
+                // 获取 Java NIO 中的 SelectableChannel 对象，也就是 NioServerSocketChannel包装下底层真正的通道对象
+                // 将其注册到一个选择器上，选择器由方法 NioEventLoop#unwrappedSelector提供,该选择器是该 EventLoop 独占持有
+                // 0代表将通道注册到选择器时,并未注册关注事件，在这里，只是单纯的将 Channel 注册到 EventLoop，该通道本身目前不会对任何事件有反应，需要等待后续的更新，在这里只是一个单纯的注册动作
                 selectionKey = javaChannel().register(eventLoop().unwrappedSelector(), 0, this);
                 return;
             } catch (CancelledKeyException e) {
@@ -414,6 +416,9 @@ public abstract class AbstractNioChannel extends AbstractChannel {
 
         final int interestOps = selectionKey.interestOps();
         if ((interestOps & readInterestOp) == 0) {
+            // 将之前 Channel 注册到 EventLoop 上的 Selector 时产生的 SelectionKey 的关注事件集合进行更新
+            // NioServerSocketChannel 的传入的值为 OP_ACCEPT，也就是其感兴趣的事件为客户端接入就绪事件
+            // NioSocketChannel 的传入的值为 OP_READ，也就是其感兴趣的事件为读就绪事件
             selectionKey.interestOps(interestOps | readInterestOp);
         }
     }

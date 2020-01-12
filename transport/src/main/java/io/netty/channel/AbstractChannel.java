@@ -492,6 +492,13 @@ public abstract class AbstractChannel extends DefaultAttributeMap implements Cha
             }
         }
 
+        /*
+         * 1)执行注册方法 doRegister。
+         * 在注册之前添加到 Channel 的 handler ，触发其 handlerAdded 事件。
+         * 设置 promise 结果为成功，触发在 pipeline 中的 handler 的 channelRegister 事件。
+         * 通道处于激活（Socket 已经打开且通道不曾关闭），并且首次注册到 EventLoop 时，触发 pipeline 中的 channelActive 事件
+         */
+
         private void register0(ChannelPromise promise) {
             try {
                 // check if the channel is still open as it could be closed in the mean time when the register
@@ -518,6 +525,8 @@ public abstract class AbstractChannel extends DefaultAttributeMap implements Cha
                 pipeline.fireChannelRegistered();
                 // Only fire a channelActive if the channel has never been registered. This prevents firing
                 // multiple channel actives if the channel is deregistered and re-registered.
+                // 对于 NioServerSocketChannel 而言，在注册 EventLoop 阶段，因为没有绑定地址，所以 isActive 是返回 false 的，也就不会启动 pipeline.fireChannelActive
+                // 在bind()阶段才会启动 pipeline.fireChannelActive
                 if (isActive()) {
                     if (firstRegistration) {
                         pipeline.fireChannelActive();
@@ -865,10 +874,14 @@ public abstract class AbstractChannel extends DefaultAttributeMap implements Cha
         }
 
         @Override
+        /*
+         * 1）检查；2）检查与转换；3）放入写出缓存
+         */
         public final void write(Object msg, ChannelPromise promise) {
             assertEventLoop();
 
             ChannelOutboundBuffer outboundBuffer = this.outboundBuffer;
+            // 确认写出缓存 outboundBuffer 是否为空。outboundBuffer 只有在通道关闭或者关闭写出方向连接时才会被设置为 null
             if (outboundBuffer == null) {
                 // If the outboundBuffer is null we know the channel was closed and so
                 // need to fail the future right away. If it is not null the handling of the rest
@@ -876,12 +889,14 @@ public abstract class AbstractChannel extends DefaultAttributeMap implements Cha
                 // See https://github.com/netty/netty/issues/2362
                 safeSetFailure(promise, newClosedChannelException(initialCloseCause));
                 // release message now to prevent resource-leak
+                // 如果放弃写出，需要通过方法 ReferenceCountUtil.release 来执行资源的释放，因为 msg 可能是一个 ByteBuf 或者其他可以释放的资源，不执行释放的话，会造成内存泄漏问题
                 ReferenceCountUtil.release(msg);
                 return;
             }
 
             int size;
             try {
+                // filterOutboundMessage 方法用于被子类重写，用于完成对 msg 对象的转换，以及检查要写出的对象是否是当前通道支持的类型
                 msg = filterOutboundMessage(msg);
                 size = pipeline.estimatorHandle().size(msg);
                 if (size < 0) {
@@ -892,7 +907,7 @@ public abstract class AbstractChannel extends DefaultAttributeMap implements Cha
                 ReferenceCountUtil.release(msg);
                 return;
             }
-
+            // 将消息添加到写出缓存中。当这个消息代表的数据被真正写出到 socket 缓存区后，与该消息关联的 promise 对象会被设置写出结果，用于通知在其上的监听器
             outboundBuffer.addMessage(msg, size, promise);
         }
 
@@ -904,7 +919,7 @@ public abstract class AbstractChannel extends DefaultAttributeMap implements Cha
             if (outboundBuffer == null) {
                 return;
             }
-
+            // 用于添加一个刷出标记到写出缓存中
             outboundBuffer.addFlush();
             flush0();
         }

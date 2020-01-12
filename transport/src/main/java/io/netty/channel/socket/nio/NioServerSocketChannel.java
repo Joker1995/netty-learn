@@ -141,6 +141,8 @@ public class NioServerSocketChannel extends AbstractNioMessageChannel
     }
 
     @Override
+    // SocketUtils.accept(javaChannel()) 的核心就是调用 JDK NIO 的接口，通过 serverSocketChannel.accept() 来返回一个接入的通道对象，也就是 SocketChannel
+    // 并且使用 NioSocketChannel 进行封装，并且添加到 buf 中
     protected int doReadMessages(List<Object> buf) throws Exception {
         SocketChannel ch = SocketUtils.accept(javaChannel());
 

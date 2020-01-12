@@ -110,6 +110,10 @@ public final class ChannelOutboundBuffer {
      * the message was written.
      */
     public void addMessage(Object msg, int size, ChannelPromise promise) {
+        /* 构建一个新的 Entry 实例
+         * size: 其他方法中预测的 msg 代表的字节长度，该长度加上 Entry 对象本身占据的字节长度，就成为了一个 Entry 对象消耗的内存大小
+         * total(msg): 私有方法 total 计算得到的数据大小（该大小不一定表现为字节长度），用于在数据写出的时，以写出进度的时候通知 ChannelProgressivePromise类型的promise
+         */
         Entry entry = Entry.newInstance(msg, size, total(msg), promise);
         if (tailEntry == null) {
             flushedEntry = null;
@@ -124,6 +128,7 @@ public final class ChannelOutboundBuffer {
 
         // increment pending bytes after adding message to the unflushed arrays.
         // See https://github.com/netty/netty/issues/1619
+        // 通过 CAS 方式将新增 Entry 的对象消耗内存大小增加到队列的总体内存消耗大小中。并且在消耗大小超过给定的水平线，设置不可写标记，并且触发 channelWritabilityChanged 事件
         incrementPendingOutboundBytes(entry.pendingSize, false);
     }
 
@@ -137,11 +142,17 @@ public final class ChannelOutboundBuffer {
         //
         // See https://github.com/netty/netty/issues/2577
         Entry entry = unflushedEntry;
+        // 只有当前写出缓存队列中存在未标记为刷出的 Entry 时，才需要添加刷出标记，否则要么队列没数据，要么已经标记过刷出 Entry
         if (entry != null) {
             if (flushedEntry == null) {
                 // there is no flushedEntry yet, so start with the entry
                 flushedEntry = entry;
             }
+            /*
+             * 从 unflushedEntry 指向的 Entry 开始，不断的遍历，累加未真正写出的需要刷出的 Entry 的总数
+             * 并且设置每一个 Entry 的 promise 状态为不可取消，这一步是用来保留一个取消机会给外部的
+             * 每一次添加刷出标记，必然是要刷出整个队列的内容，因此 unflushedEntry 指针在最后设置为空
+             */
             do {
                 flushed ++;
                 if (!entry.promise.setUncancellable()) {
