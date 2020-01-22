@@ -31,6 +31,7 @@ import static java.lang.Math.min;
  * number of readable bytes if the read operation was not able to fill a certain
  * amount of the allocated buffer two times consecutively.  Otherwise, it keeps
  * returning the same prediction.
+ * 继承于 DefaultMaxMessagesRecvByteBufAllocator，通过自适应方式来计算最合适的 ByteBuf 分配大小
  */
 public class AdaptiveRecvByteBufAllocator extends DefaultMaxMessagesRecvByteBufAllocator {
 
@@ -41,6 +42,7 @@ public class AdaptiveRecvByteBufAllocator extends DefaultMaxMessagesRecvByteBufA
     private static final int INDEX_INCREMENT = 4;
     private static final int INDEX_DECREMENT = 1;
 
+    // 如果发送的数据更大了，使用 16 作为递增单位则递增效率很低，此时就可以使用 2 倍递增
     private static final int[] SIZE_TABLE;
 
     static {
@@ -90,13 +92,16 @@ public class AdaptiveRecvByteBufAllocator extends DefaultMaxMessagesRecvByteBufA
     }
 
     private final class HandleImpl extends MaxMessageHandle {
+        // 最小允许的 ByteBuf 分配大小在数组中下标。默认情况下，最小允许的分配大小是 64 字节
         private final int minIndex;
+        // 最大允许的 ByteBuf 分配大小在数组中下标。默认情况下，最大允许的分配大小是 65536 字节
         private final int maxIndex;
         private int index;
         private int nextReceiveBufferSize;
         private boolean decreaseNow;
 
         HandleImpl(int minIndex, int maxIndex, int initial) {
+            // initial:首次分配 ByteBuf 的大小。默认情况下为 1024 字节
             this.minIndex = minIndex;
             this.maxIndex = maxIndex;
 
@@ -121,6 +126,10 @@ public class AdaptiveRecvByteBufAllocator extends DefaultMaxMessagesRecvByteBufA
             return nextReceiveBufferSize;
         }
 
+        /*
+         * 如果读取的字节数大于等于预期，则扩容一次；如果读取的字节数小于预期，则判断是否小于指定缩容大小（当前下标左移缩容步长得到的数组的值）
+         * 第一次小于则设置一个标志位，第二次小于则执行缩容并复位标志位。在缩容上相对谨慎，避免一次接受的数据较少，而后续接受的数据较大又需要扩容导致增加读取次数
+         */
         private void record(int actualReadBytes) {
             if (actualReadBytes <= SIZE_TABLE[max(0, index - INDEX_DECREMENT - 1)]) {
                 if (decreaseNow) {

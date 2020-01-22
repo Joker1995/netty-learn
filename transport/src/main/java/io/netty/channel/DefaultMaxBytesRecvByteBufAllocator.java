@@ -27,6 +27,8 @@ import java.util.Map.Entry;
 /**
  * The {@link RecvByteBufAllocator} that yields a buffer size prediction based upon decrementing the value from
  * the max bytes per read.
+ * 限定一个读取循环（可能执行多次读取操作）读取字节上限 maxBytesPerRead 和每次读取操作读取字节上限 individualReadMax
+ * 分配 ByteBuf 大小时，取 individualReadMax 和剩余可读字节数（maxBytesPerRead减去已经读取的总数）的较小值分配。这种策略下，一轮读取的上限是被固定的
  */
 public class DefaultMaxBytesRecvByteBufAllocator implements MaxBytesRecvByteBufAllocator {
     private volatile int maxBytesPerRead;

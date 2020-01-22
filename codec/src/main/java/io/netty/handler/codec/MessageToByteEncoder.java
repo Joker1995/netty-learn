@@ -99,6 +99,7 @@ public abstract class MessageToByteEncoder<I> extends ChannelOutboundHandlerAdap
     public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) throws Exception {
         ByteBuf buf = null;
         try {
+            // 通过方法 acceptOutboundMessage 判断当前传递的对象是否是本编码器可以处理的范围，依靠的就是 TypeParameterMatcher 的类型判断能力
             if (acceptOutboundMessage(msg)) {
                 @SuppressWarnings("unchecked")
                 I cast = (I) msg;

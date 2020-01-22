@@ -41,6 +41,7 @@ public interface RecvByteBufAllocator {
         /**
          * Creates a new receive buffer whose capacity is probably large enough to read all inbound data and small
          * enough not to waste its space.
+         * 根据内建的策略，使用分配器分配一个合适大小的ByteBuf
          */
         ByteBuf allocate(ByteBufAllocator alloc);
 
@@ -74,6 +75,7 @@ public interface RecvByteBufAllocator {
          * occurs. If a negative value is seen it is expected to be return on the next call to
          * {@link #lastBytesRead()}. A negative value will signal a termination condition enforced externally
          * to this class and is not required to be enforced in {@link #continueReading()}.
+         * 记录本次读取到的字节数，统计数据内部应用于分配策略
          */
         void lastBytesRead(int bytes);
 
@@ -98,6 +100,7 @@ public interface RecvByteBufAllocator {
         /**
          * Determine if the current read loop should continue.
          * @return {@code true} if the read loop should continue reading. {@code false} if the read loop is complete.
+         * 是否应该继续下一轮从通道读取数据
          */
         boolean continueReading();
 

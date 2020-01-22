@@ -108,22 +108,22 @@ final class PoolChunk<T> implements PoolChunkMetric {
     private static final int INTEGER_SIZE_MINUS_ONE = Integer.SIZE - 1;
 
     final PoolArena<T> arena;
-    final T memory;
-    final boolean unpooled;
-    final int offset;
-    private final byte[] memoryMap;
-    private final byte[] depthMap;
+    final T memory;// //连续内存空间的底层载体，可能是 byte[]，也可能是 DirectByteBuffer
+    final boolean unpooled;// //该内存块是否属于内存池的一部分
+    final int offset;// //当 memory 是 DirectByteBuffer 时，offer 代表着其内存空间地址的起始位置
+    private final byte[] memoryMap;// 存储管理内存区域的二叉树的节点的值；完全二叉树可以使用数组表现
+    private final byte[] depthMap;// 存储管理内存区域的二叉树的节点的初始值
     private final PoolSubpage<T>[] subpages;
     /** Used to determine if the requested capacity is equal to or greater than pageSize. */
     private final int subpageOverflowMask;
-    private final int pageSize;
-    private final int pageShifts;
-    private final int maxOrder;
-    private final int chunkSize;
-    private final int log2ChunkSize;
+    private final int pageSize;// 内存块是由连续的内存页构成，pageSize 是内存页的大小
+    private final int pageShifts;//pageSize = 1 << pageShifts
+    private final int maxOrder;// 二叉树的最大深度
+    private final int chunkSize;// 内存块的大小
+    private final int log2ChunkSize;// log2ChunkSize=log2(chunkSize)
     private final int maxSubpageAllocs;
     /** Used to mark memory as unusable */
-    private final byte unusable;
+    private final byte unusable;// unusable=maxOrder+1，当一个节点的值等于 unusable 时，意味着该节点不可分配了
 
     // Use as cache for ByteBuffer created from the memory. These are just duplicates and so are only a container
     // around the memory itself. These are often needed for operations within the Pooled*ByteBuf and so
@@ -132,7 +132,7 @@ final class PoolChunk<T> implements PoolChunkMetric {
     // This may be null if the PoolChunk is unpooled as pooling the ByteBuffer instances does not make any sense here.
     private final Deque<ByteBuffer> cachedNioBuffers;
 
-    private int freeBytes;
+    private int freeBytes;// 当前还剩余可分配大小
 
     PoolChunkList<T> parent;
     PoolChunk<T> prev;
@@ -271,7 +271,7 @@ final class PoolChunk<T> implements PoolChunkMetric {
             byte val1 = value(id);
             byte val2 = value(id ^ 1);
             logChild -= 1; // in first iteration equals log, subsequently reduce 1 from logChild as we traverse up
-
+            // 存在一种申请空间时不存在的情况：两个兄弟节点的值都为初始值时，父节点的值也为初始值而不是两者之中的较小值
             if (val1 == logChild && val2 == logChild) {
                 setValue(parentId, (byte) (logChild - 1));
             } else {
@@ -286,17 +286,24 @@ final class PoolChunk<T> implements PoolChunkMetric {
     /**
      * Algorithm to allocate an index in memoryMap when we query for a free node
      * at depth d
-     *
+     * 从根节点出发至目标深度寻找可分配节点
      * @param d depth
      * @return index in memoryMap
      */
     private int allocateNode(int d) {
         int id = 1;
+        // 对于在深度 d 的节点，节点在 memoryMap 中的下标的取值从 1<<d 到 (1<<(d+1)-1)
+        // 这意味对于深度 d 的节点，节点下标 & initial 的值等于节点下标本身
+        // 而对于深度小于 d 的节点，节点下标 & initial 的值为 0
+        // 在排除目标节点深度不会超过 d 的情况下，这个特性可以用于判断目标节点是否处于深度 d
         int initial = - (1 << d); // has last d bits = 0 and rest all = 1
+        // 该节点能够分配的连续空间所在的深度
         byte val = value(id);
+        // 如果 value>d 就意味着该节点无法分配所需空间
         if (val > d) { // unusable
             return -1;
         }
+        // value<=d 可以确认当前内存块或者说二叉树存在分配的节点,在没有达到深度 d 之前，id&initial 的值为 0
         while (val < d || (id & initial) == 0) { // id & initial == 1 << d for all ids at depth d, for < d it is 0
             id <<= 1;
             val = value(id);
@@ -308,16 +315,21 @@ final class PoolChunk<T> implements PoolChunkMetric {
         byte value = value(id);
         assert value == d && (id & initial) == 1 << d : String.format("val = %d, id & initial = %d, d = %d",
                 value, id & initial, d);
+        // 将该节点的值标记为不可使用，也就是最大深度 +1，即 unusable
         setValue(id, unusable); // mark as unusable
+        // 需要不断更新父节点的值直到根节点为止，调用方法 updateParentsAlloc
+        // 获取父节点的 id，并且对比自己和兄弟节点的值，选择较小的值设置到父节点上
         updateParentsAlloc(id);
         return id;
     }
 
     /**
      * Allocate a run of pages (>=1)
-     *
+     * 计算分配节点所在深度
      * @param normCapacity normalized capacity
      * @return index in memoryMap
+     * pageSize<<(maxOrder-d)=normCapacity ==> 1<<pageShifts+maxOrder-d=normCapacity
+     * ==> pageShifts+maxOrder-d = log2(normCapacity)==>d=maxOrder - (log2(normCapacity) - pageShifts)
      */
     private long allocateRun(int normCapacity) {
         int d = maxOrder - (log2(normCapacity) - pageShifts);
@@ -373,6 +385,7 @@ final class PoolChunk<T> implements PoolChunkMetric {
      * @param handle handle to free
      */
     void free(long handle, ByteBuffer nioBuffer) {
+        // 通过 handle 计算出节点在二叉树的下标 memoryMapIdx。将该节点的值恢复为初始值，也就是 depth(memoryMapIdx)
         int memoryMapIdx = memoryMapIdx(handle);
         int bitmapIdx = bitmapIdx(handle);
 
@@ -391,6 +404,7 @@ final class PoolChunk<T> implements PoolChunkMetric {
         }
         freeBytes += runLength(memoryMapIdx);
         setValue(memoryMapIdx, depth(memoryMapIdx));
+        //需要将父节点的值也更新，并且循环更新直到根节点，使用方法 updateParentsFree
         updateParentsFree(memoryMapIdx);
 
         if (nioBuffer != null && cachedNioBuffers != null &&
@@ -400,8 +414,11 @@ final class PoolChunk<T> implements PoolChunkMetric {
     }
 
     void initBuf(PooledByteBuf<T> buf, ByteBuffer nioBuffer, long handle, int reqCapacity) {
-        int memoryMapIdx = memoryMapIdx(handle);
-        int bitmapIdx = bitmapIdx(handle);
+        // handle 二叉树使用数组来存放，节点的下标是一个 int 整型
+        // 但是在 allocate 方法中是使用一个 long 变量来存储这个数据
+        // 因为一个 long 变量被拆分为高低 2 个 32 位整型来看待，低位的 32 位整型用来存储节点的下标，而高位则用于小内存分配
+        int memoryMapIdx = memoryMapIdx(handle); // memoryMapIdx 属性就是 handler 的低 32 位
+        int bitmapIdx = bitmapIdx(handle);// 小内存分配时不为0
         if (bitmapIdx == 0) {
             byte val = value(memoryMapIdx);
             assert val == unusable : String.valueOf(val);
@@ -456,7 +473,10 @@ final class PoolChunk<T> implements PoolChunkMetric {
 
     private int runOffset(int id) {
         // represents the 0-based offset in #bytes from start of the byte-array chunk
+        // 1 << depth(id) 得到的是二叉树在深度 d 的最左侧第一个节点在数组中的下标
+        // 该值与节点下标 id 进行异或操作，得到的结果就是在深度 d 上，在节点 memoryMapIdx 之前还有多少个同深度的节点
         int shift = id ^ 1 << depth(id);
+        //  管理的内存空间相对于内存块起始位置的偏移量 = 个数 * 该深度的单位空间大小，也就是 shift * runLength(id)
         return shift * runLength(id);
     }
 

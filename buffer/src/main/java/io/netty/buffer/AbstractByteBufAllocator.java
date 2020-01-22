@@ -38,6 +38,12 @@ public abstract class AbstractByteBufAllocator implements ByteBufAllocator {
 
     protected static ByteBuf toLeakAwareBuffer(ByteBuf buf) {
         ResourceLeakTracker<ByteBuf> leak;
+        /*
+         * 1. ResourceLeakDetector.Level#DISABLED：关闭，这种模式下不进行泄露监控。
+         * 2. ResourceLeakDetector.Level#SIMPLE：简单，这种模式下以1/128（默认）的概率抽取ByteBuf进行泄露监控。这种监控并不会追踪其调用信息，只是追踪了生成ByteBuf时候的堆栈信息。
+         * 3. ResourceLeakDetector.Level#ADVANCED：增强，抽取概率与简单模式相同；每一次对ByteBuf的操作都会记录下堆栈信息，对性能的损耗比较大。
+         * 4. ResourceLeakDetector.Level#PARANOID：偏执，抽取概率为100%；每一次对ByteBuf的操作都会记录下堆栈堆栈信息，对性能的损耗最大
+         */
         switch (ResourceLeakDetector.getLevel()) {
             case SIMPLE:
                 leak = AbstractByteBuf.leakDetector.track(buf);

@@ -24,6 +24,7 @@ import io.netty.util.UncheckedBooleanSupplier;
 /**
  * Default implementation of {@link MaxMessagesRecvByteBufAllocator} which respects {@link ChannelConfig#isAutoRead()}
  * and also prevents overflow.
+ * 限定一个读取循环中最大读取的消息数。每执行一次读取操作，读取消息数 +1。这种策略下，实际相当于限定了一个读取循环中最多有几个读取操作
  */
 public abstract class DefaultMaxMessagesRecvByteBufAllocator implements MaxMessagesRecvByteBufAllocator {
     private volatile int maxMessagesPerRead;

@@ -258,6 +258,9 @@ public class ResourceLeakDetector<T> {
             return null;
         }
 
+        // 如果定义的监控等级为Simple或者Advance，则按照概率抽取对象进行监控。
+        // 判断(PlatformDependent.threadLocalRandom().nextInt(samplingInterval)) == 0是通过线程内随机数来决定本次是否监控特定对象。
+        // samplingInterval默认情况下取值为128，这就意味着随机情况下 1 / 128 的概率会对当前对象进行监控
         if (level.ordinal() < Level.PARANOID.ordinal()) {
             if ((PlatformDependent.threadLocalRandom().nextInt(samplingInterval)) == 0) {
                 reportLeak();
@@ -265,7 +268,9 @@ public class ResourceLeakDetector<T> {
             }
             return null;
         }
+        // 如果监控等级为PARANOID，则必然对当前对象进行监控了。reportLeak方法用于在日志中输出错误信息，也就是内存泄漏的追踪信息
         reportLeak();
+        // 返回了一个DefaultResourceLeak对象用于完成对资源对象的追踪
         return new DefaultResourceLeak(obj, refQueue, allLeaks);
     }
 
@@ -294,11 +299,13 @@ public class ResourceLeakDetector<T> {
                 break;
             }
 
+            // 用于确认追踪对象是否已经停止了追踪。如果还未停止追踪就进入了引用队列，意味着其追踪的资源对象在被GC之前并没有调用相关的手动释放方法
             if (!ref.dispose()) {
                 continue;
             }
 
             String records = ref.toString();
+            // 当内存泄漏被检测到的情况，将DefaultResourceLeak内部的堆栈信息输出成字符串。同一个泄漏情况，生成的字符串是相同的，因此这里使用了一个并发的Map用于去重检查。避免重复的输出内存泄漏日志
             if (reportedLeaks.putIfAbsent(records, Boolean.TRUE) == null) {
                 if (records.isEmpty()) {
                     reportUntracedLeak(resourceType);
@@ -355,11 +362,15 @@ public class ResourceLeakDetector<T> {
                         AtomicIntegerFieldUpdater.newUpdater(DefaultResourceLeak.class, "droppedRecords");
 
         @SuppressWarnings("unused")
+        // Record对象形成一个后进先出的链表，head属性指向最后一次调用record方法存储的调用记录
         private volatile Record head;
         @SuppressWarnings("unused")
+        // 记录被丢弃的record对象个数
         private volatile int droppedRecords;
 
+        // 存储所有追踪对象实例
         private final Set<DefaultResourceLeak<?>> allLeaks;
+        // 被追踪的资源对象的hash值，该值用于在close方法调用时进行比对，避免不正确的执行close
         private final int trackedHash;
 
         DefaultResourceLeak(
@@ -373,6 +384,8 @@ public class ResourceLeakDetector<T> {
             // Store the hash of the tracked object to later assert it in the close(...) method.
             // It's important that we not store a reference to the referent as this would disallow it from
             // be collected via the WeakReference.
+            // 使用了System.identityHashCode获取了hashcode来作为close方法比对的依据
+            // 如果存储了referent，就会导致资源对象无法被GC。因为存在着一个强引用链
             trackedHash = System.identityHashCode(referent);
             allLeaks.add(this);
             // Create a new Record so we always have the creation stacktrace included.
@@ -418,6 +431,7 @@ public class ResourceLeakDetector<T> {
          */
         private void record0(Object hint) {
             // Check TARGET_RECORDS > 0 here to avoid similar check before remove from and add to lastRecords
+            // 通过CAS操作，将新的Record对象设置为头结点，也就是代码⑤。头结点指向的Record记着当前链表的长度。一旦长度超过额定阀值，也就是TARGET_RECORDS（默认值为 4 ），就开始按照一定的概率抛弃当前的头结点
             if (TARGET_RECORDS > 0) {
                 Record oldHead;
                 Record prevHead;
@@ -452,6 +466,9 @@ public class ResourceLeakDetector<T> {
 
         @Override
         public boolean close() {
+            // 从全局泄漏追踪对象集合allLeaks删除当前的泄漏追踪对象
+            // 在删除成功的基础上，将弱引用的引用清空（这个操作不会导致被引用对象的GC，并且GC线程也不会使用这个Java方法来清除引用）
+            // 将DefaultResourceLeak的头结点设置为null，标记其已经处于关闭状态
             if (allLeaks.remove(this)) {
                 // Call clear so the reference is not even enqueued.
                 clear();
@@ -495,6 +512,9 @@ public class ResourceLeakDetector<T> {
          *
          * @param ref the reference. If {@code null}, this method has no effect.
          * @see java.lang.ref.Reference#reachabilityFence
+         * 在DefaultResourceLeak#close()方法中，如果close方法还没有执行完毕，trackedObject对象实例就被 GC 回收了
+         * 就会导致DefaultResourceLeak对象被加入到引用队列中，从而可能在reportLeak方法调用中触发方法dispose，
+         * 假设此时close方法才刚开始执行，则dispose方法可能返回true。程序就会判定这个对象出现了泄露，然而实际上却没有
          */
         private static void reachabilityFence0(Object ref) {
             if (ref != null) {

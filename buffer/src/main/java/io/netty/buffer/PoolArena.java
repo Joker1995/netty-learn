@@ -43,10 +43,10 @@ abstract class PoolArena<T> implements PoolArenaMetric {
     final PooledByteBufAllocator parent;
 
     private final int maxOrder;
-    final int pageSize;
-    final int pageShifts;
-    final int chunkSize;
-    final int subpageOverflowMask;
+    final int pageSize;// 内存页大小
+    final int pageShifts;// 内存页大小的 log2 值
+    final int chunkSize;// 内存块大小
+    final int subpageOverflowMask;// 触发内存页等分的子页大小溢出掩码
     final int numSmallSubpagePools;
     final int directMemoryCacheAlignment;
     final int directMemoryCacheAlignmentMask;
@@ -183,6 +183,7 @@ abstract class PoolArena<T> implements PoolArenaMetric {
                     // was able to allocate out of the cache so move on
                     return;
                 }
+                // 获取规范大小对应的子页数组的下标
                 tableIdx = tinyIdx(normCapacity);
                 table = tinySubpagePools;
             } else {
@@ -199,6 +200,8 @@ abstract class PoolArena<T> implements PoolArenaMetric {
             /**
              * Synchronize on the head. This is needed as {@link PoolChunk#allocateSubpage(int)} and
              * {@link PoolChunk#free(long)} may modify the doubly linked list as well.
+             * 在操作子页链表之间，首先对头结点加锁，因为后续的内存分配动作是不能并发的
+             * 子页链表中存储的 PoolSubPage 都是有可分配空间的。一个子页如果全部空间都被分配后，会将自身从链表中删除
              */
             synchronized (head) {
                 final PoolSubpage<T> s = head.next;
@@ -206,12 +209,15 @@ abstract class PoolArena<T> implements PoolArenaMetric {
                     assert s.doNotDestroy && s.elemSize == normCapacity;
                     long handle = s.allocate();
                     assert handle >= 0;
+                    // 通过内存地址信息 handle，计算出该内存空间所处的二叉树节点坐标，位图坐标，子页等分大小也即可用空间大小，空间起始偏移量等信息
+                    // 将这些信息传递给 ByteBuf 实例，即可初始化 ByteBuf
                     s.chunk.initBufWithSubpage(buf, null, handle, reqCapacity);
                     incTinySmallAllocation(tiny);
                     return;
                 }
             }
             synchronized (this) {
+                // 创建新的叶子并且进行内存分配
                 allocateNormal(buf, reqCapacity, normCapacity);
             }
 
@@ -309,6 +315,9 @@ abstract class PoolArena<T> implements PoolArenaMetric {
             }
             destroyChunk = !chunk.parent.free(chunk, handle, nioBuffer);
         }
+        // 线程缓存中的数据可能会一直存在，直到该线程销毁时在 finalizer 方法中去释放其中包含的内存空间。从 finalizer 方法中释放内存空间时，是调用 PoolThreadCache.MemoryRegionCache#freeEntry
+        // 对于 Tomcat 而言，当其关闭一个应用后就会卸载其对应的 WebAppClassLoader，而在执行上述方法的时候，对于 Normal，Small，Tiny 这三个枚举，
+        // 可能需要 WebAppClassLoader 来进行载入，而此时该 Loader 已经卸载，无法执行载入工作，就会抛出异常。因此这里加入了 if 逻辑来判断
         if (destroyChunk) {
             // destroyChunk not need to be called while holding the synchronized lock.
             destroyChunk(chunk);

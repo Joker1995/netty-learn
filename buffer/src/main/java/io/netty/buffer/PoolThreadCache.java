@@ -187,6 +187,8 @@ final class PoolThreadCache {
             return false;
         }
         boolean allocated = cache.allocate(buf, reqCapacity);
+        // 执行了 freeSweepAllocationThreshold 次内存分配后，检查所有的 MemoryRegionCache 对象，执行 trim（整理）操作
+        // 将在链表中但是未曾参与过内存申请的空间归还给内存池
         if (++ allocations >= freeSweepAllocationThreshold) {
             allocations = 0;
             trim();

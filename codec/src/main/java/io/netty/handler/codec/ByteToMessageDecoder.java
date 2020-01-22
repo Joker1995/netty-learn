@@ -74,6 +74,7 @@ public abstract class ByteToMessageDecoder extends ChannelInboundHandlerAdapter 
 
     /**
      * Cumulate {@link ByteBuf}s by merge them into one {@link ByteBuf}'s, using memory copies.
+     * 将新读取到的 ByteBuf 的内容，添加到 cumulation 属性代表的 ByteBuf 上，并且释放新的 ByteBuf 对象
      */
     public static final Cumulator MERGE_CUMULATOR = new Cumulator() {
         @Override
@@ -107,6 +108,7 @@ public abstract class ByteToMessageDecoder extends ChannelInboundHandlerAdapter 
      * Cumulate {@link ByteBuf}s by add them to a {@link CompositeByteBuf} and so do no memory copy whenever possible.
      * Be aware that {@link CompositeByteBuf} use a more complex indexing implementation so depending on your use-case
      * and the decoder implementation this may be slower then just use the {@link #MERGE_CUMULATOR}.
+     * 新读取到的 ByteBuf 的对象直接进入到 CompositeByteBuf 的内容体中，没有数据拷贝的过程
      */
     public static final Cumulator COMPOSITE_CUMULATOR = new Cumulator() {
         @Override
@@ -271,25 +273,35 @@ public abstract class ByteToMessageDecoder extends ChannelInboundHandlerAdapter 
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
         if (msg instanceof ByteBuf) {
+            // CodecOutputList 继承于 ArrayList，是一个轻量级的包装类，内部多添加了一些属性。其起到的作用就是存放解码后的消息对象，以及支持以线程变量的形式被缓存起来
+            // CodecOutputList.newInstance() 从线程变量中获取了一个实例
             CodecOutputList out = CodecOutputList.newInstance();
             try {
                 ByteBuf data = (ByteBuf) msg;
                 first = cumulation == null;
+                // 首先尽可能的读取二进制数据，对于这些读取到的数据执行解码操作，解码生成的消息对象传递到后端的处理器中处理；
+                // 而不能完整解码为一个消息对象的不完整报文的二进制数据，则驻留在 ByteToMessageDecoder 内部
                 if (first) {
                     cumulation = data;
                 } else {
+                    // 每次从通道中读取到数据，需要将读取到的数据合并到之前的累积部分，也就是合并到 cumulation 中
                     cumulation = cumulator.cumulate(ctx.alloc(), cumulation, data);
                 }
+                // 内部调用 ByteToMessageDecoder#decode 方法来将 cumulation 的内容解码成特定的消息对象。这个方法是一个抽象方法，交给具体的子类去实现
+                // 而 ByteToMessageDecoder 只是完成对一个整体流程的控制
                 callDecode(ctx, cumulation, out);
             } catch (DecoderException e) {
                 throw e;
             } catch (Exception e) {
                 throw new DecoderException(e);
             } finally {
+                // 如果不存在剩余的二进制数据,将 cumulation 代表的实例释放后即可
                 if (cumulation != null && !cumulation.isReadable()) {
                     numReads = 0;
                     cumulation.release();
                     cumulation = null;
+                // 如果还剩余一部分不完整报文的数据且读取次数已经超过阀值，此时可以根据情况，对 ByteBuf 实例进行压缩
+                // 通过方法 ByteBuf#discardSomeReadBytes 完成,避免 writeIndex 无谓增大，导致扩容发生
                 } else if (++ numReads >= discardAfterReads) {
                     // We did enough reads already try to discard some bytes so we not risk to see a OOME.
                     // See https://github.com/netty/netty/issues/4275
@@ -330,6 +342,11 @@ public abstract class ByteToMessageDecoder extends ChannelInboundHandlerAdapter 
     }
 
     @Override
+    /*
+     * 在 channelRead 方法中，如果有解码出消息实体，该属性被设置为 true。
+     * 如果没有消息被解码出来，并且通道本身并不是自动注册读取，意味着本次的读取并没有能真正读取到一个有效的消息，
+     * 此时就需要继续发起一个读取请求，也就是 ctx.read
+     */
     public void channelReadComplete(ChannelHandlerContext ctx) throws Exception {
         numReads = 0;
         discardSomeReadBytes();

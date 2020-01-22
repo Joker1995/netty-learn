@@ -18,21 +18,21 @@ package io.netty.buffer;
 
 final class PoolSubpage<T> implements PoolSubpageMetric {
 
-    final PoolChunk<T> chunk;
-    private final int memoryMapIdx;
-    private final int runOffset;
-    private final int pageSize;
-    private final long[] bitmap;
+    final PoolChunk<T> chunk;// 该子页对应的内存页归属的内存块对象
+    private final int memoryMapIdx;// 该子页对应的内存页在内存块中的二叉树节点坐标
+    private final int runOffset;//该子页对应的内存页的偏移量
+    private final int pageSize;//子页大小
+    private final long[] bitmap;//用于管理子页中每一等分的使用信息
 
-    PoolSubpage<T> prev;
-    PoolSubpage<T> next;
+    PoolSubpage<T> prev;//用于连接链表中的前向节点
+    PoolSubpage<T> next;//用于连接链表中的后继节点
 
-    boolean doNotDestroy;
-    int elemSize;
-    private int maxNumElems;
-    private int bitmapLength;
-    private int nextAvail;
-    private int numAvail;
+    boolean doNotDestroy;//该子页是否处于使用中
+    int elemSize;//该子页的等分大小；或者说等分后，每一个区间的大小
+    private int maxNumElems;//该子页等分的区间个数
+    private int bitmapLength;//管理该子页等分信息的位图的有效长度
+    private int nextAvail;//下一个可用区间的下标
+    private int numAvail;//当前可用区间个数
 
     // TODO: Test if adding padding helps under contention
     //private long pad0, pad1, pad2, pad3, pad4, pad5, pad6, pad7;
@@ -95,7 +95,7 @@ final class PoolSubpage<T> implements PoolSubpageMetric {
         if (-- numAvail == 0) {
             removeFromPool();
         }
-
+        // 通过方法 toHandle 将位图坐标和子页空间本身的二叉树节点坐标整合在一起
         return toHandle(bitmapIdx);
     }
 
@@ -156,6 +156,8 @@ final class PoolSubpage<T> implements PoolSubpageMetric {
     }
 
     private int getNextAvail() {
+        // nextAvail 属性的值指向下一个可用的等分空间的位图坐标。该值会在被分配的内存空间归还到子页中时设置
+        // 如果 nextAvail 大于等于 0，意味着值有效，则返回该值并且将 nextAvail 设置为 -1，标识其无效化
         int nextAvail = this.nextAvail;
         if (nextAvail >= 0) {
             this.nextAvail = -1;
@@ -167,6 +169,8 @@ final class PoolSubpage<T> implements PoolSubpageMetric {
     private int findNextAvail() {
         final long[] bitmap = this.bitmap;
         final int bitmapLength = this.bitmapLength;
+        // 一个 bits 管理着 64 个等分空间的信息，如果全部使用，则 bits 的值应该是 0XFFFFFFFFFFFFFFFF，对应的 ~bits 的值就是 0
+        // 在非零的情况下，意味着可能存在可用的空间
         for (int i = 0; i < bitmapLength; i ++) {
             long bits = bitmap[i];
             if (~bits != 0) {
@@ -195,6 +199,8 @@ final class PoolSubpage<T> implements PoolSubpageMetric {
     }
 
     private long toHandle(int bitmapIdx) {
+        // 使用一个 long 整型表达，高 32 位是位图坐标，低 32 位是二叉树节点坐标
+        // 由于位图坐标中存在 0 这个有效值，为了和没有位图坐标这个情况区分开，因此高 32 位的值是 0x40000000 与位图坐标值并操作之后的值
         return 0x4000000000000000L | (long) bitmapIdx << 32 | memoryMapIdx;
     }
 

@@ -99,6 +99,7 @@ class SimpleLeakAwareByteBuf extends WrappedByteBuf {
 
     @Override
     public boolean release() {
+        // 调用父类的release来完成资源的释放。如果释放成功则调用closeLeak来关闭资源追踪
         if (super.release()) {
             closeLeak();
             return true;

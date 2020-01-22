@@ -41,17 +41,17 @@ public class PooledByteBufAllocator extends AbstractByteBufAllocator implements 
     private static final int DEFAULT_NUM_HEAP_ARENA;
     private static final int DEFAULT_NUM_DIRECT_ARENA;
 
-    private static final int DEFAULT_PAGE_SIZE;
-    private static final int DEFAULT_MAX_ORDER; // 8192 << 11 = 16 MiB per chunk
-    private static final int DEFAULT_TINY_CACHE_SIZE;
-    private static final int DEFAULT_SMALL_CACHE_SIZE;
-    private static final int DEFAULT_NORMAL_CACHE_SIZE;
-    private static final int DEFAULT_MAX_CACHED_BUFFER_CAPACITY;
-    private static final int DEFAULT_CACHE_TRIM_INTERVAL;
-    private static final long DEFAULT_CACHE_TRIM_INTERVAL_MILLIS;
+    private static final int DEFAULT_PAGE_SIZE;// 内存页大小
+    private static final int DEFAULT_MAX_ORDER; // 8192 << 11 = 16 MiB per chunk  内存池二叉树最大深度
+    private static final int DEFAULT_TINY_CACHE_SIZE;// 线程缓存中微小内存缓存个数
+    private static final int DEFAULT_SMALL_CACHE_SIZE;// 线程缓存中小内存缓存个数
+    private static final int DEFAULT_NORMAL_CACHE_SIZE;// 线程缓存中普通内存缓存个数
+    private static final int DEFAULT_MAX_CACHED_BUFFER_CAPACITY;// 线程缓存中普通内存最大的缓存内存大小
+    private static final int DEFAULT_CACHE_TRIM_INTERVAL;// 线程缓存中触发缓存整理的分配阀值
+    private static final long DEFAULT_CACHE_TRIM_INTERVAL_MILLIS;// 线程缓存中周期触发缓存整理的时间间隔
     private static final boolean DEFAULT_USE_CACHE_FOR_ALL_THREADS;
     private static final int DEFAULT_DIRECT_MEMORY_CACHE_ALIGNMENT;
-    static final int DEFAULT_MAX_CACHED_BYTEBUFFERS_PER_CHUNK;
+    static final int DEFAULT_MAX_CACHED_BYTEBUFFERS_PER_CHUNK;// 在 PoolChunk 默认缓存的供复用 ByteBuffer 对象个数
 
     private static final int MIN_PAGE_SIZE = 4096;
     private static final int MAX_CHUNK_SIZE = (int) (((long) Integer.MAX_VALUE + 1) / 2);
@@ -167,6 +167,11 @@ public class PooledByteBufAllocator extends AbstractByteBufAllocator implements 
     public static final PooledByteBufAllocator DEFAULT =
             new PooledByteBufAllocator(PlatformDependent.directBufferPreferred());
 
+    /* heapArenas、directArenas长度默认都是 2 倍的 cpu 核数。与 NioEventLoopGroup 的默认大小相同
+     * 为了在默认情况下，让一个 NioEventLoop 线程拥有一个实际上没有竞争的 PoolArena 对象，以减少在该对象上的同步开销
+     * 线程缓存中使用的 heapArena 和 directArena 是从这两个数组中分配的
+     * 当有新的线程产生时，就会有新的线程缓存 PoolThreadCache 对象被创建，该对象会从 heapArenas 数组和 directArenas 数组中寻找分配给 PoolThreadCache 次数最少的 PoolArena
+     */
     private final PoolArena<byte[]>[] heapArenas;
     private final PoolArena<ByteBuffer>[] directArenas;
     private final int tinyCacheSize;

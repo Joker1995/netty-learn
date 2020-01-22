@@ -163,6 +163,8 @@ abstract class PooledByteBuf<T> extends AbstractReferenceCountedByteBuf {
 
     @Override
     protected final void deallocate() {
+        // 当调用 release 方法时，会将引用计数减 1。如果引用计数归零，则意味着可以安全释放掉对象
+        // 将自身一些属性设置为 null 或者表示不使用的特定值,通过 PoolArena.free 方法归还内存空间和可复用的 ByteBuffer 对象,通过 recycle 方法回收自身实例，供后续复用
         if (handle >= 0) {
             final long handle = this.handle;
             this.handle = -1;
